@@ -1,0 +1,40 @@
+name: Fetch MimiVsJames Substack
+
+on:
+  schedule:
+    - cron: "0 2 * * *"   # 每天台灣時間早上 10 點（UTC+8 → UTC 02:00）
+  workflow_dispatch:        # 也可手動觸發
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install requests playwright
+          playwright install chromium --with-deps
+
+      - name: Fetch articles
+        env:
+          SUBSTACK_EMAIL:    ${{ secrets.SUBSTACK_EMAIL }}
+          SUBSTACK_PASSWORD: ${{ secrets.SUBSTACK_PASSWORD }}
+        run: |
+          cd mimiVsJamesArticles
+          python3 fetch_substack.py
+
+      - name: Commit & push changes
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add mimiVsJamesArticles/
+          git diff --staged --quiet || git commit -m "chore: update articles $(date +'%Y-%m-%d')"
+          git push
