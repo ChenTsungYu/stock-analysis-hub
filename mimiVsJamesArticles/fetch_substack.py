@@ -11,8 +11,10 @@ import json
 import re
 import os
 import sys
+import time
 from html.parser import HTMLParser
 from datetime import datetime
+from pathlib import Path
 
 # ==============================
 # 設定（優先讀取環境變數）
@@ -24,6 +26,18 @@ SUBSTACK_PASSWORD = os.environ.get("SUBSTACK_PASSWORD", "")
 PUBLICATION = "mimivsjames2"
 BASE_URL    = f"https://{PUBLICATION}.substack.com"
 OUTPUT_DIR  = os.path.dirname(os.path.abspath(__file__))
+
+SIGN_IN_URL = "https://substack.com/sign-in"
+EMAIL_SELECTOR = 'input[type="email"], input[name="email"]'
+PASSWORD_SELECTOR = 'input[type="password"], input[name="password"]'
+PASSWORD_LOGIN_SELECTOR = 'a:has-text("Sign in with password")'
+LOGIN_TIMEOUT_MS = 60_000
+# GitHub-hosted runners are more likely to be served a slow Cloudflare
+# JavaScript challenge when Playwright's default HeadlessChrome UA is used.
+CHROME_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+)
 
 
 # ── HTML → 純文字 ──────────────────────────────────────────
@@ -59,28 +73,65 @@ def html_to_text(html):
 
 
 # ── Playwright 登入取 cookie ───────────────────────────────
+def wait_for_login_form(page, timeout=LOGIN_TIMEOUT_MS):
+    """Wait for either of Substack's supported email input variants."""
+    email_input = page.locator(EMAIL_SELECTOR).first
+    email_input.wait_for(state="visible", timeout=timeout)
+    return email_input
+
+
+def save_login_diagnostics(page):
+    """Save non-secret diagnostics before credentials are entered."""
+    debug_dir = Path(os.environ.get("SUBSTACK_DEBUG_DIR", "/tmp/substack-debug"))
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        page.screenshot(path=str(debug_dir / "sign-in-timeout.png"), full_page=True)
+        (debug_dir / "sign-in-timeout.html").write_text(page.content(), encoding="utf-8")
+        print(f"ℹ️ 登入頁診斷檔已寫入 {debug_dir}")
+    except Exception as exc:
+        print(f"ℹ️ 無法儲存登入頁診斷檔：{type(exc).__name__}")
+
+
+def wait_for_session_cookie(ctx, timeout=LOGIN_TIMEOUT_MS):
+    deadline = time.monotonic() + timeout / 1000
+    while time.monotonic() < deadline:
+        sid = next((c["value"] for c in ctx.cookies() if c["name"] == "substack.sid"), None)
+        if sid:
+            return sid
+        time.sleep(1)
+    raise RuntimeError("登入逾時：找不到 substack.sid cookie（可能需要互動式驗證）")
+
+
 def get_cookie_via_playwright(email, password):
     from playwright.sync_api import sync_playwright
     print("🔐 使用 Playwright 登入 Substack...")
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
-        ctx = browser.new_context()
-        page = ctx.new_page()
-        page.goto("https://substack.com/sign-in")
-        page.wait_for_selector('input[type="email"]', timeout=15000)
-        page.fill('input[type="email"]', email)
-        page.click('button[type="submit"]')
-        page.wait_for_selector('input[type="password"]', timeout=10000)
-        page.fill('input[type="password"]', password)
-        page.click('button[type="submit"]')
-        # 等待登入完成
-        page.wait_for_url("https://substack.com/**", timeout=20000)
-        page.wait_for_timeout(2000)
-        cookies = ctx.cookies()
-        browser.close()
-    sid = next((c["value"] for c in cookies if c["name"] == "substack.sid"), None)
-    if not sid:
-        raise RuntimeError("登入失敗：找不到 substack.sid cookie")
+        try:
+            ctx = browser.new_context(user_agent=CHROME_USER_AGENT, locale="en-US")
+            page = ctx.new_page()
+            page.goto(SIGN_IN_URL, wait_until="domcontentloaded", timeout=LOGIN_TIMEOUT_MS)
+            try:
+                email_input = wait_for_login_form(page)
+            except Exception:
+                # This happens before typing any credentials, so the artifact is safe
+                # to upload from CI for diagnosing Cloudflare/challenge pages.
+                save_login_diagnostics(page)
+                raise
+
+            # Substack's default Continue action sends a magic link.  Explicitly
+            # select the password route before submitting the credentials.
+            password_login = page.locator(PASSWORD_LOGIN_SELECTOR).first
+            if password_login.is_visible(timeout=5_000):
+                password_login.click()
+                email_input = wait_for_login_form(page)
+            page.locator(PASSWORD_SELECTOR).first.wait_for(state="visible", timeout=LOGIN_TIMEOUT_MS)
+            email_input.fill(email)
+            page.locator(PASSWORD_SELECTOR).first.fill(password)
+            page.locator('form button[type="submit"]').first.click()
+            sid = wait_for_session_cookie(ctx)
+        finally:
+            browser.close()
     print("✅ 登入成功，取得 session cookie")
     return sid
 

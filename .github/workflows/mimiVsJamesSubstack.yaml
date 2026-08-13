@@ -27,9 +27,18 @@ jobs:
         env:
           SUBSTACK_EMAIL:    ${{ secrets.SUBSTACK_EMAIL }}
           SUBSTACK_PASSWORD: ${{ secrets.SUBSTACK_PASSWORD }}
+          SUBSTACK_DEBUG_DIR: ${{ runner.temp }}/substack-debug
         run: |
           cd mimiVsJamesArticles
           python3 fetch_substack.py
+
+      - name: Upload Substack sign-in diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: substack-sign-in-diagnostics
+          path: ${{ runner.temp }}/substack-debug/
+          if-no-files-found: ignore
 
       - name: Commit & push changes
         run: |
