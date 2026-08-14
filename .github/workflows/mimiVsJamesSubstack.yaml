@@ -18,19 +18,25 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
       - name: Install dependencies
         run: |
-          pip install requests playwright
-          playwright install chromium --with-deps
+          uv sync --locked
+          uv run playwright install chromium --with-deps
 
       - name: Fetch articles
         env:
+          # Cookie mode takes priority when supplied; otherwise email/password is used.
+          SUBSTACK_SID:      ${{ secrets.SUBSTACK_SID }}
           SUBSTACK_EMAIL:    ${{ secrets.SUBSTACK_EMAIL }}
           SUBSTACK_PASSWORD: ${{ secrets.SUBSTACK_PASSWORD }}
           SUBSTACK_DEBUG_DIR: ${{ runner.temp }}/substack-debug
         run: |
-          cd mimiVsJamesArticles
-          python3 fetch_substack.py
+          uv run python mimiVsJamesArticles/fetch_substack.py
 
       - name: Upload Substack sign-in diagnostics
         if: failure()

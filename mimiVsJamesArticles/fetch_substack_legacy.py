@@ -18,7 +18,7 @@ from datetime import datetime
 # ==============================
 # 填入你的 substack.sid cookie
 # ==============================
-SUBSTACK_SID = "在這裡填入你的 substack.sid cookie 值"
+SUBSTACK_SID = ""
 # ==============================
 
 PUBLICATION = "mimivsjames2"
