@@ -23,28 +23,18 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install dependencies
-        run: |
-          uv sync --locked
-          uv run playwright install chromium --with-deps
+      - name: Install Python dependencies
+        run: uv sync --locked
 
       - name: Fetch articles
         env:
-          # Cookie mode takes priority when supplied; otherwise email/password is used.
-          SUBSTACK_SID:      ${{ secrets.SUBSTACK_SID }}
-          SUBSTACK_EMAIL:    ${{ secrets.SUBSTACK_EMAIL }}
-          SUBSTACK_PASSWORD: ${{ secrets.SUBSTACK_PASSWORD }}
-          SUBSTACK_DEBUG_DIR: ${{ runner.temp }}/substack-debug
+          # CI always runs in fixed-cookie mode: GitHub Actions' shared-runner
+          # IPs get flagged by Substack/Cloudflare's bot detection, so the
+          # Playwright email/password login path (which needs Chromium) is
+          # only usable locally. Refresh SUBSTACK_SID manually when it expires.
+          SUBSTACK_SID: ${{ secrets.SUBSTACK_SID }}
         run: |
           uv run python mimiVsJamesArticles/fetch_substack.py
-
-      - name: Upload Substack sign-in diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: substack-sign-in-diagnostics
-          path: ${{ runner.temp }}/substack-debug/
-          if-no-files-found: ignore
 
       - name: Commit & push changes
         run: |
