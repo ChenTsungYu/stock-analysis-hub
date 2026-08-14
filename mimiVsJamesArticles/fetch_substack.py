@@ -135,14 +135,19 @@ def save_login_diagnostics(page):
 def wait_for_session_cookie(ctx, timeout=LOGIN_TIMEOUT_MS):
     deadline = time.monotonic() + timeout / 1000
     while time.monotonic() < deadline:
-        sid = next((c["value"] for c in ctx.cookies() if c["name"] == "substack.sid"), None)
-        if sid:
-            return sid
+        if any(c["name"] == "substack.sid" for c in ctx.cookies()):
+            return
         time.sleep(1)
     raise RuntimeError("登入逾時：找不到 substack.sid cookie（可能需要互動式驗證）")
 
 
-def get_cookie_via_playwright(email, password):
+def get_cookies_via_playwright(email, password):
+    """Log in with Playwright and return the full browser cookie jar.
+
+    Substack's API rejects requests missing the Cloudflare/anti-bot cookies
+    that ride alongside substack.sid, so the whole jar (not just the sid) has
+    to be carried over into the requests session, or API calls get a 403.
+    """
     from playwright.sync_api import sync_playwright
     print("🔐 使用 Playwright 登入 Substack...")
     with sync_playwright() as pw:
@@ -169,18 +174,23 @@ def get_cookie_via_playwright(email, password):
             email_input.fill(email)
             page.locator(PASSWORD_SELECTOR).first.fill(password)
             page.locator('form button[type="submit"]').first.click()
-            sid = wait_for_session_cookie(ctx)
+            wait_for_session_cookie(ctx)
+            cookies = ctx.cookies()
         finally:
             browser.close()
     print("✅ 登入成功，取得 session cookie")
-    return sid
+    return cookies
 
 
 # ── Substack API ───────────────────────────────────────────
-def make_session(sid):
+def make_session(sid=None, cookies=None):
     s = requests.Session()
-    s.cookies.set("substack.sid", sid, domain=f"{PUBLICATION}.substack.com")
-    s.headers.update({"User-Agent": "Mozilla/5.0", "Referer": BASE_URL})
+    if cookies:
+        for c in cookies:
+            s.cookies.set(c["name"], c["value"], domain=c.get("domain") or f"{PUBLICATION}.substack.com")
+    else:
+        s.cookies.set("substack.sid", sid, domain=f"{PUBLICATION}.substack.com")
+    s.headers.update({"User-Agent": CHROME_USER_AGENT, "Referer": BASE_URL})
     return s
 
 def fetch_all_posts(session):
@@ -276,15 +286,14 @@ def save_post(post, output_dir, session):
 # ── 主程式 ────────────────────────────────────────────────
 def main():
     # 取得 session cookie
-    sid = SUBSTACK_SID
-    if not sid:
-        if SUBSTACK_EMAIL and SUBSTACK_PASSWORD:
-            sid = get_cookie_via_playwright(SUBSTACK_EMAIL, SUBSTACK_PASSWORD)
-        else:
-            print("❌ 請設定 SUBSTACK_SID 或 SUBSTACK_EMAIL + SUBSTACK_PASSWORD")
-            sys.exit(1)
-
-    session = make_session(sid)
+    if SUBSTACK_SID:
+        session = make_session(sid=SUBSTACK_SID)
+    elif SUBSTACK_EMAIL and SUBSTACK_PASSWORD:
+        cookies = get_cookies_via_playwright(SUBSTACK_EMAIL, SUBSTACK_PASSWORD)
+        session = make_session(cookies=cookies)
+    else:
+        print("❌ 請設定 SUBSTACK_SID 或 SUBSTACK_EMAIL + SUBSTACK_PASSWORD")
+        sys.exit(1)
     print(f"📡 連接 {BASE_URL}...")
     all_posts = fetch_all_posts(session)
     print(f"\n✅ 共 {len(all_posts)} 篇，開始下載內文...\n")

@@ -1,7 +1,7 @@
 # MimiVsJames 美股即時策略分享 - 文章索引
 
 > 來源：https://mimivsjames2.substack.com
-> 更新：2026-08-14 20:28
+> 更新：2026-08-14 21:37
 > 共 5 篇
 
 ---
